@@ -1,5 +1,6 @@
-/* Raul P. Pelaez 2020. Batched Nbody evaluation of RPY kernel,
-   Given N batches of particles (all with the same size NperBatch) the kernel nbodyFiberRPYGPU evaluates the matrix product RPY(ri, rj)*F ((NxN)*(Nx3) size) for all particles inside each batch.
+/* Raul P. Pelaez 2020. Batched Nbody evaluation of RPY kernels,
+   Given N batches of particles (all with the same size NperBatch) the kernel nbodyBatchRPYGPU evaluates the matrix product RPY(ri, rj)*F ((NperBatchxNperBatch)*(3xNperBatch) size) for all particles inside each batch.
+   If DOUBLE_PRECISION is defined the code will be compiled in double.
  */
 #ifndef NBODY_RPY_CUH
 #define NBODY_RPY_CUH
@@ -10,7 +11,6 @@ using resource = uammd::device_memory_resource;
 using device_temporary_memory_resource = uammd::pool_memory_resource_adaptor<resource>;
 template<class T> using allocator_thrust = uammd::polymorphic_allocator<T, device_temporary_memory_resource, thrust::cuda::pointer<T>>;
 template<class T>  using cached_vector = thrust::device_vector<T, allocator_thrust<T>>;
-
 
 #ifndef DOUBLE_PRECISION
 #define SINGLE_PRECISION
@@ -67,21 +67,21 @@ __device__ real3 computeRPYDotProductPair(real3 pi, real3 pj, real3 vj, real rh)
 //This kernel loads batches of particles into shared memory to speed up the computation.
 //Threads will tipically read one value from global memory but blockDim.x from shared memory.
 template<class vecType>
-__global__ void nbodyFiberRPYGPU(const vecType* pos,
-				 const vecType* forces,
-				 real3* Mv,
-				 real selfMobility,
-				 real hydrodynamicRadius,
-				 int Nfibers,
-				 int NperFiber){
+__global__ void computeRPYBatchedGPU(const vecType* pos,
+				     const vecType* forces,
+				     real3* Mv,
+				     real selfMobility,
+				     real hydrodynamicRadius,
+				     int Nbatches,
+				     int NperBatch){
   const int tid = blockIdx.x*blockDim.x+threadIdx.x;
-  const int N = Nfibers*NperFiber;
+  const int N = Nbatches*NperBatch;
   const bool active = tid < N;
   const int id = tid;
-  const int fiber_id = thrust::min(int(blockIdx.x*blockDim.x)/NperFiber, Nfibers-1);
+  const int fiber_id = thrust::min(int(blockIdx.x*blockDim.x)/NperBatch, Nbatches-1);
   const int blobsPerTile = blockDim.x;
-  const int firstId = fiber_id*NperFiber;
-  const int lastId =((firstId+blockDim.x)/NperFiber + 1)*NperFiber;
+  const int firstId = fiber_id*NperBatch;
+  const int lastId =((firstId+blockDim.x)/NperBatch + 1)*NperBatch;
   const int tileOfFirstParticle = firstId/blobsPerTile;
   const int tileOfLastParticle = thrust::min(lastId/blobsPerTile+1, blobsPerTile);
   extern __shared__ char shMem[];
@@ -102,7 +102,7 @@ __global__ void nbodyFiberRPYGPU(const vecType* pos,
     for(uint counter = 0; counter<blockDim.x; counter++){
       if(!active) break;
       int cur_j = tile*blockDim.x + counter;
-      int fiber_j = cur_j/NperFiber;
+      int fiber_j = cur_j/NperBatch;
       if(fiber_id == fiber_j and cur_j<N){
 	real3 fj = shForce[counter];
 	real3 pj = shPos[counter];
@@ -116,39 +116,38 @@ __global__ void nbodyFiberRPYGPU(const vecType* pos,
 }
 
 template<class vecType>
-void computeIntraFiberRPY(vecType* pos, vecType* force, real3 *Mv,
-			  int Nfibers, int NperFiber, real selfMobility, real hydrodynamicRadius){
-  int N = Nfibers*NperFiber;
-  int nearestWarpMultiple = ((NperFiber+16)/32)*32;
+void computeRPYBatched(vecType* pos, vecType* force, real3 *Mv,
+			  int Nbatches, int NperBatch, real selfMobility, real hydrodynamicRadius){
+  int N = Nbatches*NperBatch;
+  int nearestWarpMultiple = ((NperBatch+16)/32)*32;
   int minBlockSize = std::min(std::max(nearestWarpMultiple, 32), 512);
   int Nthreads = minBlockSize<N?minBlockSize:N;
   int Nblocks  = (N+Nthreads-1)/Nthreads;
-  nbodyFiberRPYGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
+  computeRPYBatchedGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
 								    force,
 								    Mv,
 								    selfMobility,
 								    hydrodynamicRadius,
-								    Nfibers, NperFiber);
+								    Nbatches, NperBatch);
   cudaDeviceSynchronize();
 }
 
 template<class vecType>
 //Naive N^2 algorithm (looks like x20 times slower than the fast kernel
-__global__ void nbodyFiberRPYGPUNaive(const vecType* pos,
+__global__ void computeRPYBatchedNaiveGPU(const vecType* pos,
 				      const vecType* forces,
 				      real3* Mv,
 				      real selfMobility,
 				      real hydrodynamicRadius,
-				      int Nfibers,
-				      int NperFiber){
+				      int Nbatches,
+				      int NperBatch){
   const int tid = blockIdx.x*blockDim.x+threadIdx.x;
-  if(tid>=Nfibers*NperFiber) return;
+  if(tid>=Nbatches*NperBatch) return;
   real3 pi = make_real3(pos[tid]);
   real3 MF = real3();
-  int fiber_id = tid/NperFiber;
-  printf("%g %g %g\n", pi.x, pi.y, pi.z);
-  for(int i= fiber_id*NperFiber; i<(fiber_id+1)*NperFiber; i++){
-    if(i>=Nfibers*NperFiber) break;
+  int fiber_id = tid/NperBatch;
+  for(int i= fiber_id*NperBatch; i<(fiber_id+1)*NperBatch; i++){
+    if(i>=Nbatches*NperBatch) break;
     real3 pj = make_real3(pos[i]);
     real3 fj = make_real3(forces[i]);    
     MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);
@@ -157,18 +156,18 @@ __global__ void nbodyFiberRPYGPUNaive(const vecType* pos,
 }
 
 template<class vecType>
-void computeIntraFiberRPYNaive(vecType* pos, vecType* force, real3 *Mv,
-			       int Nfibers, int NperFiber,real selfMobility, real hydrodynamicRadius){
-  int N = Nfibers*NperFiber;
+void computeRPYBatchedNaive(vecType* pos, vecType* force, real3 *Mv,
+			    int Nbatches, int NperBatch,real selfMobility, real hydrodynamicRadius){
+  int N = Nbatches*NperBatch;
   int minBlockSize = 128;
   int Nthreads = minBlockSize<N?minBlockSize:N;
   int Nblocks  = N/Nthreads;
-  nbodyFiberRPYGPUNaive<<<Nblocks, Nthreads>>>(pos,
-					       force,
-					       Mv,
-					       selfMobility,
-					       hydrodynamicRadius,
-					       Nfibers, NperFiber);
+  computeRPYBatchedNaiveGPU<<<Nblocks, Nthreads>>>(pos,
+						   force,
+						   Mv,
+						   selfMobility,
+						   hydrodynamicRadius,
+						   Nbatches, NperBatch);
   cudaDeviceSynchronize();
 }
 
@@ -178,35 +177,35 @@ void computeIntraFiberRPYNaive(vecType* pos, vecType* force, real3 *Mv,
 #ifdef TEST_MODE
 
 int main(){
-  int Nfibers = 300;
-  int NperFiber = 1000;
-  thrust::device_vector<real4> pos(Nfibers*NperFiber);
-  thrust::device_vector<real4> force(Nfibers*NperFiber);
+  int Nbatches = 300;
+  int NperBatch = 1000;
+  thrust::device_vector<real4> pos(Nbatches*NperBatch);
+  thrust::device_vector<real4> force(Nbatches*NperBatch);
   thrust::fill(force.begin(), force.end(), make_real4(1.0));
   thrust::fill(pos.begin(), pos.end(), make_real4(0));
-  for(int i = 0; i< Nfibers*NperFiber; i++){
-    pos[i] = make_real4(i%NperFiber, 0, 0, 0);
+  for(int i = 0; i< Nbatches*NperBatch; i++){
+    pos[i] = make_real4(i%NperBatch, 0, 0, 0);
   } 
-  thrust::device_vector<real3> Mv(Nfibers*NperFiber);
+  thrust::device_vector<real3> Mv(Nbatches*NperBatch);
   real selfMobility= 1.0;
   real hydrodynamicRadius = 1.0;
-  computeIntraFiberRPY(thrust::raw_pointer_cast(pos.data()),
+  computeIntraBatchRPY(thrust::raw_pointer_cast(pos.data()),
 		       thrust::raw_pointer_cast(force.data()),
 		       thrust::raw_pointer_cast(Mv.data()),
-		       Nfibers, NperFiber, selfMobility, hydrodynamicRadius);
+		       Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
   auto Mv_true = Mv;
   thrust::fill(Mv_true.begin(), Mv_true.end(), real3());
-  computeIntraFiberRPYNaive(thrust::raw_pointer_cast(pos.data()),
+  computeIntraBatchRPYNaive(thrust::raw_pointer_cast(pos.data()),
 			    thrust::raw_pointer_cast(force.data()),
 			    thrust::raw_pointer_cast(Mv_true.data()),
-			    Nfibers, NperFiber,selfMobility, hydrodynamicRadius);
+			    Nbatches, NperBatch,selfMobility, hydrodynamicRadius);
   bool error = false;
-  for(int i = 0; i<Nfibers*NperFiber; i++){
+  for(int i = 0; i<Nbatches*NperBatch; i++){
     real3 res = Mv[i];
     real3 rest = Mv_true[i];
     real4 p = pos[i];
     if(res.x-rest.x > 1e-5){       
-      std::cout<<"ERROR: id: "<<i<<" fiber_id:  "<<i/NperFiber<<" difference with truth: "<<(res.x-rest.x)<<std::endl;
+      std::cout<<"ERROR: id: "<<i<<" fiber_id:  "<<i/NperBatch<<" difference with truth: "<<(res.x-rest.x)<<std::endl;
       error =true;
     }
   }
