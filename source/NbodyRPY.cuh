@@ -120,8 +120,8 @@ void computeRPYBatched(vecType* pos, vecType* force, real3 *Mv,
 			  int Nbatches, int NperBatch, real selfMobility, real hydrodynamicRadius){
   int N = Nbatches*NperBatch;
   int nearestWarpMultiple = ((NperBatch+16)/32)*32;
-  int minBlockSize = std::min(std::max(nearestWarpMultiple, 32), 512);
-  int Nthreads = minBlockSize<N?minBlockSize:N;
+  int minBlockSize = std::max(nearestWarpMultiple, 32);
+  int Nthreads = std::min(minBlockSize<N?minBlockSize:N, 512);
   int Nblocks  = (N+Nthreads-1)/Nthreads;
   computeRPYBatchedGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
 								    force,
