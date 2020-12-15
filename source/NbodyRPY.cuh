@@ -37,18 +37,18 @@ using namespace uammd;
 inline __host__  __device__  real2 RPY(real r, real rh){
   const real invrh = real(1.0)/rh;
   r *= invrh;
-  real2 c12;
   if(r >= real(2.0)){
     const real invr  = real(1.0)/r;
     const real invr2 = invr*invr;
-    c12.x = (real(0.75) + real(0.5)*invr2)*invr;
-    c12.y = (real(0.75) - real(1.5)*invr2)*invr*invr2;
+    const real f = (real(0.75) + real(0.5)*invr2)*invr;
+    const real ginvr2 = (real(0.75) - real(1.5)*invr2)*invr*invr2;
+    return {f, ginvr2};
   }
   else{
-    c12.x = real(1.0)-real(0.28125)*r;
-    c12.y = (r>real(0.0))?(real(0.09375)/r):real(0);
+    const real f = real(1.0)-real(0.28125)*r;
+    const real ginvr2 = (r>real(0.0))?(real(0.09375)/r):real(0);
+    return {f, ginvr2};
   }
-  return {c12.x*invrh, c12.y*invrh};
 }
 
 //Computes M(ri, rj)*vj
