@@ -33,7 +33,7 @@ using  real4 = double4;
 
 using namespace uammd;
 
-//RPY = (f*I + g* r\diadic r/r^2). rh is hydrodynamic radius. This function returns {f, g/r^2}
+//RPY = (1/(6*pi*viscosity*rh))*(f*I + g* r\diadic r/r^2). rh is hydrodynamic radius. This function returns {f, g/r^2}
 inline __host__  __device__  real2 RPY(real r, real rh){
   const real invrh = real(1.0)/rh;
   r *= invrh;
