@@ -41,12 +41,12 @@ inline __host__  __device__  real2 RPY(real r, real rh){
     const real invr  = real(1.0)/r;
     const real invr2 = invr*invr;
     const real f = (real(0.75) + real(0.5)*invr2)*invr;
-    const real ginvr2 = (real(0.75) - real(1.5)*invr2)*invr*invr2;
+    const real ginvr2 = (real(0.75) - real(1.5)*invr2)*invr*invr2*invrh*invrh;
     return {f, ginvr2};
   }
   else{
     const real f = real(1.0)-real(0.28125)*r;
-    const real ginvr2 = (r>real(0.0))?(real(0.09375)/r):real(0);
+    const real ginvr2 = (r>real(0.0))?(real(0.09375)/(r*rh*rh)):real(0);
     return {f, ginvr2};
   }
 }
@@ -78,7 +78,7 @@ __global__ void computeRPYBatchedGPU(const vecType* pos,
   const int N = Nbatches*NperBatch;
   const bool active = tid < N;
   const int id = tid;
-  const int fiber_id = thrust::min(int(blockIdx.x*blockDim.x)/NperBatch, Nbatches-1);
+  const int fiber_id = thrust::min(int(tid)/NperBatch, Nbatches-1);
   const int blobsPerTile = blockDim.x;
   const int firstId = fiber_id*NperBatch;
   const int lastId =((firstId+blockDim.x)/NperBatch + 1)*NperBatch;
