@@ -78,18 +78,20 @@ __global__ void computeRPYBatchedGPU(const vecType* pos,
   const int N = Nbatches*NperBatch;
   const bool active = tid < N;
   const int id = tid;
-  const int fiber_id = thrust::min(int(tid)/NperBatch, Nbatches-1);
+  const int fiber_id = thrust::min(tid/NperBatch, Nbatches-1);
   const int blobsPerTile = blockDim.x;
-  const int firstId = fiber_id*NperBatch;
+  const int firstId = blockIdx.x*blobsPerTile;
   const int lastId =((firstId+blockDim.x)/NperBatch + 1)*NperBatch;
-  const int tileOfFirstParticle = firstId/blobsPerTile;
-  const int tileOfLastParticle = thrust::min(lastId/blobsPerTile+1, blobsPerTile);
+  const int fiberOfFirstId = firstId/NperBatch;
+  const int tileOfFirstParticle = fiberOfFirstId*NperBatch/blobsPerTile;
+  const int numberTiles = N/blobsPerTile;
+  const int tileOfLastParticle = thrust::min(lastId/blobsPerTile, numberTiles);
   extern __shared__ char shMem[];
   real3 *shPos = (real3*) (shMem);
   real3 *shForce = (real3*) (shMem+blockDim.x*sizeof(real3));
   const real3 pi= active?make_real3(pos[id]):real3();
   real3 MF = real3();
-  for(int tile = tileOfFirstParticle; tile<tileOfLastParticle; tile++){
+  for(int tile = tileOfFirstParticle; tile<=tileOfLastParticle; tile++){
     //Load tile to shared memory
     int i_load = tile*blockDim.x + threadIdx.x;
     if(i_load<N){
@@ -104,8 +106,8 @@ __global__ void computeRPYBatchedGPU(const vecType* pos,
       int cur_j = tile*blockDim.x + counter;
       int fiber_j = cur_j/NperBatch;
       if(fiber_id == fiber_j and cur_j<N){
-	real3 fj = shForce[counter];
-	real3 pj = shPos[counter];
+	 real3 fj = shForce[counter];
+	 real3 pj = shPos[counter];
 	MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);	
       }
     }
@@ -121,7 +123,7 @@ void computeRPYBatched(vecType* pos, vecType* force, real3 *Mv,
   int N = Nbatches*NperBatch;
   int nearestWarpMultiple = ((NperBatch+16)/32)*32;
   int minBlockSize = std::max(nearestWarpMultiple, 32);
-  int Nthreads = std::min(minBlockSize<N?minBlockSize:N, 512);
+  int Nthreads = std::min(std::min(minBlockSize, N), 512);
   int Nblocks  = (N+Nthreads-1)/Nthreads;
   computeRPYBatchedGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
 								    force,
@@ -149,7 +151,7 @@ __global__ void computeRPYBatchedNaiveGPU(const vecType* pos,
   for(int i= fiber_id*NperBatch; i<(fiber_id+1)*NperBatch; i++){
     if(i>=Nbatches*NperBatch) break;
     real3 pj = make_real3(pos[i]);
-    real3 fj = make_real3(forces[i]);    
+    real3 fj = make_real3(forces[i]);
     MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);
   }
   Mv[tid] = selfMobility*MF;
@@ -161,7 +163,7 @@ void computeRPYBatchedNaive(vecType* pos, vecType* force, real3 *Mv,
   int N = Nbatches*NperBatch;
   int minBlockSize = 128;
   int Nthreads = minBlockSize<N?minBlockSize:N;
-  int Nblocks  = N/Nthreads;
+  int Nblocks  = N/Nthreads+1;
   computeRPYBatchedNaiveGPU<<<Nblocks, Nthreads>>>(pos,
 						   force,
 						   Mv,
@@ -173,29 +175,47 @@ void computeRPYBatchedNaive(vecType* pos, vecType* force, real3 *Mv,
 
 #endif
 
-
 #ifdef TEST_MODE
+#include <thrust/random.h>
+struct prg
+{
+    real a, b;
+
+    __host__ __device__
+    prg(real _a=0.f, real _b=1.f) : a(_a), b(_b) {};
+
+    __host__ __device__
+        real4 operator()(const unsigned int n) const
+        {
+            thrust::default_random_engine rng;
+            thrust::uniform_real_distribution<real> dist(a, b);
+            rng.discard(4*n);
+
+            return {dist(rng), dist(rng),dist(rng), dist(rng)};
+        }
+};
 
 int main(){
-  int Nbatches = 300;
-  int NperBatch = 1000;
+  int Nbatches = 1000;
+  int NperBatch = 129;
   thrust::device_vector<real4> pos(Nbatches*NperBatch);
   thrust::device_vector<real4> force(Nbatches*NperBatch);
-  thrust::fill(force.begin(), force.end(), make_real4(1.0));
-  thrust::fill(pos.begin(), pos.end(), make_real4(0));
-  for(int i = 0; i< Nbatches*NperBatch; i++){
-    pos[i] = make_real4(i%NperBatch, 0, 0, 0);
-  } 
+  {
+    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+    thrust::transform(index_sequence_begin, index_sequence_begin + pos.size(), pos.begin(), prg(-1.f,1.f));
+    thrust::counting_iterator<unsigned int> index_sequence_begin2(pos.size()+1);
+    thrust::transform(index_sequence_begin2, index_sequence_begin2 + force.size(), force.begin(), prg(-1.f,1.f));
+  }
   thrust::device_vector<real3> Mv(Nbatches*NperBatch);
   real selfMobility= 1.0;
   real hydrodynamicRadius = 1.0;
-  computeIntraBatchRPY(thrust::raw_pointer_cast(pos.data()),
+  computeRPYBatched(thrust::raw_pointer_cast(pos.data()),
 		       thrust::raw_pointer_cast(force.data()),
 		       thrust::raw_pointer_cast(Mv.data()),
 		       Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
   auto Mv_true = Mv;
   thrust::fill(Mv_true.begin(), Mv_true.end(), real3());
-  computeIntraBatchRPYNaive(thrust::raw_pointer_cast(pos.data()),
+  computeRPYBatchedNaive(thrust::raw_pointer_cast(pos.data()),
 			    thrust::raw_pointer_cast(force.data()),
 			    thrust::raw_pointer_cast(Mv_true.data()),
 			    Nbatches, NperBatch,selfMobility, hydrodynamicRadius);
@@ -204,7 +224,7 @@ int main(){
     real3 res = Mv[i];
     real3 rest = Mv_true[i];
     real4 p = pos[i];
-    if(res.x-rest.x > 1e-5){       
+    if(abs(res.x-rest.x) > 1e-5){
       std::cout<<"ERROR: id: "<<i<<" fiber_id:  "<<i/NperBatch<<" difference with truth: "<<(res.x-rest.x)<<std::endl;
       error =true;
     }
