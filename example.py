@@ -1,5 +1,5 @@
 #Raul P. Pelaez 2020-2021. Given a set of positions and forces acting on each particle, this module computes the product between the RPY tensor and the forces in the GPU.
-#This module works on batches of particles, all batches must have the same size. Note that a batch size of 1 is equivalent to every particle interacting to every other.
+#This module works on batches of particles, all batches must have the same size. Note that a single batch is equivalent to every particle interacting to every other.
 #Only the elements of the mobility matrix that correspond to pairs that belong to the same batch are non zero. It is equivalent to computing an NPerBatch^2 matrix-vector products for each batch separately.
 #The data layout is 3 interleaved coordinates with each batch placed after the previous one: [x_1_1, y_1_1, z_1_1,...x_1_NperBatch,...x_Nbatches_NperBatch]
 #Three algorithms are provided, each one works better in different regimes (a.i. number of particles and batch size).
