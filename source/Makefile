@@ -14,6 +14,6 @@ INCLUDE_FLAGS= `$(PYTHON)-config --includes` -I $(PYBIND_ROOT)/include/
 LIBRARY_NAME=$(MODULE_NAME)`$(PYTHON)-config --extension-suffix`
 FILE=python_wrapper.cu
 all:
-	$(NVCC) -w -shared -std=c++11 $(DOUBLEPRECISION) $(NAIVE_ALGORITHM) $(INCLUDE_FLAGS) -Xcompiler "-fPIC -w"  $(FILE) -o $(LIBRARY_NAME)
+	$(NVCC) -O3 -w -shared -std=c++14 $(DOUBLEPRECISION) $(NAIVE_ALGORITHM) $(INCLUDE_FLAGS) -DMODULENAME=$(MODULE_NAME) -Xcompiler "-fPIC -w -O3"  $(FILE) -o $(LIBRARY_NAME)
 clean:
 	rm $(LIBRARY_NAME)

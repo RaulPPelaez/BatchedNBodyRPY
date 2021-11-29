@@ -1,6 +1,11 @@
-/* Raul P. Pelaez 2020. Batched Nbody evaluation of RPY kernels,
+/* Raul P. Pelaez 2020-2021. Batched Nbody evaluation of RPY kernels,
    Given N batches of particles (all with the same size NperBatch) the kernel nbodyBatchRPYGPU evaluates the matrix product RPY(ri, rj)*F ((NperBatchxNperBatch)*(3xNperBatch) size) for all particles inside each batch.
    If DOUBLE_PRECISION is defined the code will be compiled in double.
+   Three algorithms are provided:
+     Fast: Leverages shared memory to hide bandwidth latency
+     Naive: A dumb thread-per-partice parallelization of the N^2 double loop
+     Block: Assigns a block to each particle, the first thread then reduces the result of the whole block.
+
  */
 #ifndef NBODY_RPY_CUH
 #define NBODY_RPY_CUH
@@ -87,8 +92,8 @@ __global__ void computeRPYBatchedGPU(const vecType* pos,
   const int numberTiles = N/blobsPerTile;
   const int tileOfLastParticle = thrust::min(lastId/blobsPerTile, numberTiles);
   extern __shared__ char shMem[];
-  real3 *shPos = (real3*) (shMem);
-  real3 *shForce = (real3*) (shMem+blockDim.x*sizeof(real3));
+  vecType *shPos = (vecType*) (shMem);
+  vecType *shForce = (vecType*) (shMem+blockDim.x*sizeof(vecType));
   const real3 pi= active?make_real3(pos[id]):real3();
   real3 MF = real3();
   for(int tile = tileOfFirstParticle; tile<=tileOfLastParticle; tile++){
@@ -100,15 +105,16 @@ __global__ void computeRPYBatchedGPU(const vecType* pos,
     }
     __syncthreads();
     //Compute interaction with all particles in tile
+    if(active){
 #pragma unroll 8
-    for(uint counter = 0; counter<blockDim.x; counter++){
-      if(!active) break;
-      int cur_j = tile*blockDim.x + counter;
-      int fiber_j = cur_j/NperBatch;
-      if(fiber_id == fiber_j and cur_j<N){
-	 real3 fj = shForce[counter];
-	 real3 pj = shPos[counter];
-	MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);	
+      for(uint counter = 0; counter<blockDim.x; counter++){
+	const int cur_j = tile*blockDim.x + counter;
+	const int fiber_j = cur_j/NperBatch;
+	if(fiber_id == fiber_j and cur_j<N){
+	  const real3 fj = shForce[counter];
+	  const real3 pj = shPos[counter];
+	  MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);	
+	}
       }
     }
     __syncthreads();
@@ -123,7 +129,7 @@ void computeRPYBatched(vecType* pos, vecType* force, real3 *Mv,
   int N = Nbatches*NperBatch;
   int nearestWarpMultiple = ((NperBatch+16)/32)*32;
   int minBlockSize = std::max(nearestWarpMultiple, 32);
-  int Nthreads = std::min(std::min(minBlockSize, N), 512);
+  int Nthreads = std::min(std::min(minBlockSize, N), 256);
   int Nblocks  = (N+Nthreads-1)/Nthreads;
   computeRPYBatchedGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
 								    force,
@@ -170,6 +176,56 @@ void computeRPYBatchedNaive(vecType* pos, vecType* force, real3 *Mv,
 						   selfMobility,
 						   hydrodynamicRadius,
 						   Nbatches, NperBatch);
+  cudaDeviceSynchronize();
+}
+
+
+template<class vecType>
+//NaiveBlock N^2 algorithm (looks like x20 times slower than the fast kernel
+__global__ void computeRPYBatchedNaiveBlockGPU(const vecType* pos,
+				      const vecType* forces,
+				      real3* Mv,
+				      real selfMobility,
+				      real hydrodynamicRadius,
+				      int Nbatches,
+				      int NperBatch){
+  const int tid = blockIdx.x;
+  if(tid>=Nbatches*NperBatch) return;
+  real3 pi = make_real3(pos[tid]);
+  extern __shared__ real3 MFshared[];
+  real3 MF = real3();
+  int fiber_id = tid/NperBatch;
+  int last_id = thrust::min((fiber_id+1)*NperBatch, Nbatches*NperBatch);
+  for(int i= fiber_id*NperBatch+threadIdx.x; i<last_id; i+=blockDim.x){
+      real3 pj = make_real3(pos[i]);
+      real3 fj = make_real3(forces[i]);
+      MF += computeRPYDotProductPair(pi, pj, fj, hydrodynamicRadius);
+  }
+  MFshared[threadIdx.x] = MF;
+  __syncthreads();
+  if(threadIdx.x == 0){
+    auto MFTot = real3();
+    for(int i =0; i<blockDim.x; i++){
+      MFTot += MFshared[i];
+    }
+    Mv[tid] = selfMobility*MFTot;
+  }
+
+}
+
+template<class vecType>
+void computeRPYBatchedNaiveBlock(vecType* pos, vecType* force, real3 *Mv,
+			    int Nbatches, int NperBatch,real selfMobility, real hydrodynamicRadius){
+  int N = Nbatches*NperBatch;
+  int minBlockSize = 128;
+  int Nthreads = minBlockSize<N?minBlockSize:N;
+  int Nblocks  = N;
+  computeRPYBatchedNaiveBlockGPU<<<Nblocks, Nthreads, 2*Nthreads*sizeof(real3)>>>(pos,
+										force,
+										Mv,
+										selfMobility,
+										hydrodynamicRadius,
+										Nbatches, NperBatch);
   cudaDeviceSynchronize();
 }
 
