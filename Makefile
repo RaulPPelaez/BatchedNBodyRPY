@@ -1,5 +1,5 @@
 all:
-	make -C source && mv source/*so .
+	make -C source 
 clean:
-	make -f source/Makefile clean
+	make -C source clean
 

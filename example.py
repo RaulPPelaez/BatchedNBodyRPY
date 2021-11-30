@@ -12,7 +12,7 @@
 import BatchedNBodyRPY as rpy
 import numpy as np
 numberBatchs=1;
-numberBlobsPerBatch=10000;
+numberBlobsPerBatch=50000;
 selfMobility= 1.0;
 hydrodynamicRadius = 1.0;
 np.random.seed(1234)
@@ -25,21 +25,21 @@ print("Forces[:9]:", forces[:9])
 Ntest=10
 for i in range(0,Ntest):
     MFNaive=np.zeros(3*numberBatchs*numberBlobsPerBatch, precision);
-    rpy.computeMdotNaive(positions, forces, MFNaive,
-	                 numberBatchs, numberBlobsPerBatch,
-	                 selfMobility, hydrodynamicRadius)
+    rpy.computeMdot(positions, forces, MFNaive,
+	            numberBatchs, numberBlobsPerBatch,
+	            selfMobility, hydrodynamicRadius, "naive")
 
 for i in range(0,Ntest):
     MF=np.zeros(3*numberBatchs*numberBlobsPerBatch, precision);
     rpy.computeMdot(positions, forces, MF,
 	            numberBatchs, numberBlobsPerBatch,
-	            selfMobility, hydrodynamicRadius)
+	            selfMobility, hydrodynamicRadius, "fast")
 
 for i in range(0,Ntest):
     MFBlock=np.zeros(3*numberBatchs*numberBlobsPerBatch, precision);
-    rpy.computeMdotBlock(positions, forces, MFBlock,
+    rpy.computeMdot(positions, forces, MFBlock,
                          numberBatchs, numberBlobsPerBatch,
-                         selfMobility, hydrodynamicRadius)
+                         selfMobility, hydrodynamicRadius, "block")
 
 
 err=MFBlock-MFNaive

@@ -12,22 +12,18 @@
 #include<thrust/device_vector.h>
 #include<iostream>
 #include"allocator.h"
+#include"interface.h"
 using resource = uammd::device_memory_resource;
 using device_temporary_memory_resource = uammd::pool_memory_resource_adaptor<resource>;
 template<class T> using allocator_thrust = uammd::polymorphic_allocator<T, device_temporary_memory_resource, thrust::cuda::pointer<T>>;
 template<class T>  using cached_vector = thrust::device_vector<T, allocator_thrust<T>>;
 
-#ifndef DOUBLE_PRECISION
-#define SINGLE_PRECISION
-#endif
 namespace uammd{
 #if defined SINGLE_PRECISION
-using  real  = float;
 using  real2 = float2;
 using  real3 = float3;
 using  real4 = float4;
 #else
-using  real  = double;
 using  real2 = double2;
 using  real3 = double3;
 using  real4 = double4;
@@ -37,6 +33,7 @@ using  real4 = double4;
 #include"vector.cuh"
 
 using namespace uammd;
+
 
 //RPY = (1/(6*pi*viscosity*rh))*(f*I + g* r\diadic r/r^2). rh is hydrodynamic radius. This function returns {f, g/r^2}
 inline __host__  __device__  real2 RPY(real r, real rh){
@@ -229,67 +226,26 @@ void computeRPYBatchedNaiveBlock(vecType* pos, vecType* force, real3 *Mv,
   cudaDeviceSynchronize();
 }
 
-#endif
 
-#ifdef TEST_MODE
-#include <thrust/random.h>
-struct prg
-{
-    real a, b;
-
-    __host__ __device__
-    prg(real _a=0.f, real _b=1.f) : a(_a), b(_b) {};
-
-    __host__ __device__
-        real4 operator()(const unsigned int n) const
-        {
-            thrust::default_random_engine rng;
-            thrust::uniform_real_distribution<real> dist(a, b);
-            rng.discard(4*n);
-
-            return {dist(rng), dist(rng),dist(rng), dist(rng)};
-        }
-};
-
-int main(){
-  int Nbatches = 1000;
-  int NperBatch = 129;
-  thrust::device_vector<real4> pos(Nbatches*NperBatch);
-  thrust::device_vector<real4> force(Nbatches*NperBatch);
-  {
-    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
-    thrust::transform(index_sequence_begin, index_sequence_begin + pos.size(), pos.begin(), prg(-1.f,1.f));
-    thrust::counting_iterator<unsigned int> index_sequence_begin2(pos.size()+1);
-    thrust::transform(index_sequence_begin2, index_sequence_begin2 + force.size(), force.begin(), prg(-1.f,1.f));
-  }
-  thrust::device_vector<real3> Mv(Nbatches*NperBatch);
-  real selfMobility= 1.0;
-  real hydrodynamicRadius = 1.0;
-  computeRPYBatched(thrust::raw_pointer_cast(pos.data()),
-		       thrust::raw_pointer_cast(force.data()),
-		       thrust::raw_pointer_cast(Mv.data()),
-		       Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
-  auto Mv_true = Mv;
-  thrust::fill(Mv_true.begin(), Mv_true.end(), real3());
-  computeRPYBatchedNaive(thrust::raw_pointer_cast(pos.data()),
-			    thrust::raw_pointer_cast(force.data()),
-			    thrust::raw_pointer_cast(Mv_true.data()),
-			    Nbatches, NperBatch,selfMobility, hydrodynamicRadius);
-  bool error = false;
-  for(int i = 0; i<Nbatches*NperBatch; i++){
-    real3 res = Mv[i];
-    real3 rest = Mv_true[i];
-    real4 p = pos[i];
-    if(abs(res.x-rest.x) > 1e-5){
-      std::cout<<"ERROR: id: "<<i<<" fiber_id:  "<<i/NperBatch<<" difference with truth: "<<(res.x-rest.x)<<std::endl;
-      error =true;
-    }
-  }
-  if(not error)
-    std::cout<<"ALL IS GOOD"<<std::endl;
-
-return 0;
+using LayoutType = real3;
+void callBatchedNBodyRPY(const real* h_pos, const real* h_forces,
+			 real* h_MF, int Nbatches, int NperBatch,
+			 real selfMobility, real hydrodynamicRadius, algorithm alg){
+  constexpr size_t elementsPerValue = sizeof(LayoutType)/sizeof(real);
+  const int numberParticles = Nbatches * NperBatch;
+  cached_vector<real> pos(h_pos, h_pos + elementsPerValue*numberParticles);
+  cached_vector<real> forces(h_forces, h_forces + elementsPerValue*numberParticles);
+  cached_vector<real> Mv(elementsPerValue * numberParticles);
+  auto kernel = computeRPYBatched<LayoutType>;
+  if(alg==algorithm::naive)
+    kernel = computeRPYBatchedNaive<LayoutType>;
+  else if(alg==algorithm::block)
+    kernel = computeRPYBatchedNaiveBlock<LayoutType>;
+  kernel((LayoutType *)thrust::raw_pointer_cast(pos.data()),
+	 (LayoutType *)thrust::raw_pointer_cast(forces.data()),
+	 (LayoutType *)thrust::raw_pointer_cast(Mv.data()),
+	 Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
+  thrust::copy(Mv.begin(), Mv.end(), h_MF);
 }
 
 #endif
-
