@@ -20,20 +20,21 @@ template<class T>  using cached_vector = thrust::device_vector<T, allocator_thru
 
 namespace uammd{
 #if defined SINGLE_PRECISION
-using  real2 = float2;
-using  real3 = float3;
-using  real4 = float4;
+  using  real  = float;
+  using  real2 = float2;
+  using  real3 = float3;
+  using  real4 = float4;
 #else
-using  real2 = double2;
-using  real3 = double3;
-using  real4 = double4;
+  using  real  = double;
+  using  real2 = double2;
+  using  real3 = double3;
+  using  real4 = double4;
 #endif
 }
 
 #include"vector.cuh"
 
 using namespace uammd;
-
 
 //RPY = (1/(6*pi*viscosity*rh))*(f*I + g* r\diadic r/r^2). rh is hydrodynamic radius. This function returns {f, g/r^2}
 inline __host__  __device__  real2 RPY(real r, real rh){
@@ -212,7 +213,7 @@ __global__ void computeRPYBatchedNaiveBlockGPU(const vecType* pos,
 
 template<class vecType>
 void computeRPYBatchedNaiveBlock(vecType* pos, vecType* force, real3 *Mv,
-			    int Nbatches, int NperBatch,real selfMobility, real hydrodynamicRadius){
+				 int Nbatches, int NperBatch,real selfMobility, real hydrodynamicRadius){
   int N = Nbatches*NperBatch;
   int minBlockSize = 128;
   int Nthreads = minBlockSize<N?minBlockSize:N;
@@ -226,26 +227,26 @@ void computeRPYBatchedNaiveBlock(vecType* pos, vecType* force, real3 *Mv,
   cudaDeviceSynchronize();
 }
 
-
-using LayoutType = real3;
-void callBatchedNBodyRPY(const real* h_pos, const real* h_forces,
-			 real* h_MF, int Nbatches, int NperBatch,
-			 real selfMobility, real hydrodynamicRadius, algorithm alg){
-  constexpr size_t elementsPerValue = sizeof(LayoutType)/sizeof(real);
-  const int numberParticles = Nbatches * NperBatch;
-  cached_vector<real> pos(h_pos, h_pos + elementsPerValue*numberParticles);
-  cached_vector<real> forces(h_forces, h_forces + elementsPerValue*numberParticles);
-  cached_vector<real> Mv(elementsPerValue * numberParticles);
-  auto kernel = computeRPYBatched<LayoutType>;
-  if(alg==algorithm::naive)
-    kernel = computeRPYBatchedNaive<LayoutType>;
-  else if(alg==algorithm::block)
-    kernel = computeRPYBatchedNaiveBlock<LayoutType>;
-  kernel((LayoutType *)thrust::raw_pointer_cast(pos.data()),
-	 (LayoutType *)thrust::raw_pointer_cast(forces.data()),
-	 (LayoutType *)thrust::raw_pointer_cast(Mv.data()),
-	 Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
-  thrust::copy(Mv.begin(), Mv.end(), h_MF);
+namespace nbody_rpy{  
+  using LayoutType = real3;
+  void callBatchedNBodyRPY(const real* h_pos, const real* h_forces,
+			   real* h_MF, int Nbatches, int NperBatch,
+			   real selfMobility, real hydrodynamicRadius, algorithm alg){
+    constexpr size_t elementsPerValue = sizeof(LayoutType)/sizeof(real);
+    const int numberParticles = Nbatches * NperBatch;
+    cached_vector<real> pos(h_pos, h_pos + elementsPerValue*numberParticles);
+    cached_vector<real> forces(h_forces, h_forces + elementsPerValue*numberParticles);
+    cached_vector<real> Mv(elementsPerValue * numberParticles);
+    auto kernel = computeRPYBatched<LayoutType>;
+    if(alg==algorithm::naive)
+      kernel = computeRPYBatchedNaive<LayoutType>;
+    else if(alg==algorithm::block)
+      kernel = computeRPYBatchedNaiveBlock<LayoutType>;
+    kernel((LayoutType *)thrust::raw_pointer_cast(pos.data()),
+	   (LayoutType *)thrust::raw_pointer_cast(forces.data()),
+	   (LayoutType *)thrust::raw_pointer_cast(Mv.data()),
+	   Nbatches, NperBatch, selfMobility, hydrodynamicRadius);
+    thrust::copy(Mv.begin(), Mv.end(), h_MF);
+  }
 }
-
 #endif

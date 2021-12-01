@@ -4,16 +4,16 @@
 #ifndef DOUBLE_PRECISION
 #define SINGLE_PRECISION
 #endif
-namespace uammd{
+namespace nbody_rpy{
 #if defined SINGLE_PRECISION
-using  real  = float;
+  using  real  = float;
 #else
-using  real  = double;
+  using  real  = double;
 #endif
-}
-enum class algorithm{fast, naive, block, advise};
-void callBatchedNBodyRPY(const uammd::real* h_pos, const uammd::real* h_forces,
-			 uammd::real* h_MF, int Nbatches, int NperBatch,
-			 uammd::real selfMobility, uammd::real hydrodynamicRadius, algorithm alg);
 
+  enum class algorithm{fast, naive, block, advise};
+  void callBatchedNBodyRPY(const real* h_pos, const real* h_forces,
+			   real* h_MF, int Nbatches, int NperBatch,
+			   real selfMobility, real hydrodynamicRadius, algorithm alg);
+}
 #endif

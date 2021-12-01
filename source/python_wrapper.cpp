@@ -9,7 +9,7 @@
 #include<pybind11/pybind11.h>
 #include<pybind11/numpy.h>
 namespace py = pybind11;
-using namespace uammd;
+using namespace nbody_rpy;
 auto adviseAlgorithm(int Nbatches, int NperBatch){
   int N = Nbatches*NperBatch;
   if(N<5e3){
@@ -20,6 +20,7 @@ auto adviseAlgorithm(int Nbatches, int NperBatch){
   }
   return algorithm::fast;
 }
+
 auto stringToAlgorithm(std::string alg_str){
   if(alg_str == "advise") return algorithm::advise;
   else if(alg_str == "block") return algorithm::block;
@@ -30,6 +31,7 @@ auto stringToAlgorithm(std::string alg_str){
   }
   return algorithm::advise;
 }
+
 void computeMdot(py::array_t<real> h_pos, py::array_t<real> h_forces,
                  py::array_t<real> h_MF, int Nbatches, int NperBatch,
                  real selfMobility, real hydrodynamicRadius, std::string alg_str){
