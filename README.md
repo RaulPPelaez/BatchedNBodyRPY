@@ -15,7 +15,7 @@ As a side note, the reduction performed by Block is more accurate than the other
 
 In order to compile this repo you need [pybind11](https://github.com/pybind/pybind11), it is already included as a submodule, so simply clone this repo recursively to get it:  
 ```shell
-git clone --recursive https://github.com/stochasticHydroTools/DPPoissonTests
+git clone --recursive https://github.com/RaulPPelaez/BatchedNBodyRPY 
 ```
 You need the CUDA toolkit installed, I tested up to the latest version at the moment (CUDA 11).  
 Finally a working python environment is required.  
