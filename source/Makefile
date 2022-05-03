@@ -2,8 +2,8 @@
 PYBIND_ROOT=pybind11/
 #This Makefile assumes the command $(PYTHON)-config exists
 PYTHON=python3
-NVCC=nvcc
 CXX=g++
+NVCC=nvcc -ccbin=$(CXX)
 #Uncomment for double precision, UAMMD is compiled in single by default
 #DOUBLEPRECISION=-DDOUBLE_PRECISION
 #In case you prefer to import with other name
